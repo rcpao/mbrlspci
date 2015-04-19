@@ -529,9 +529,7 @@ InitDAP:	db	10h				;00h Size of DAP (10h or 18h)
 		times	1B0h-($-$$) db 0
 VerboseLevel:	db	VERBOSE_LEVEL		;1B0 see common.ninc
 DbgLevel:	db	DBG_LEVEL		;1B1 see common.ninc
-DbgComIoBase:	dw	DBG_COM_IO_BASE		;1B2 see common.ninc
-Unused1B4	db	0			;1B4
-Unused1B5	db	0FFh			;1B5
+DbgComIoBase:	dd	DBG_COM_IO_BASE		;1B2 see common.ninc
 Unused1B6	dw	0			;1B6
 UefiDiskSig	dd	00000000h		;1B8 Win7 writes UEFI disk signature here?
 		;Some EFI BIOSes will write a non-zero number to UefiDiskSig if it is zero on boot.
@@ -980,7 +978,7 @@ PCI_CFG_DATA	equ	0CFCh
 		mov	[cs:PciFnNr], al	;
 		mov	[cs:PciRegNr], al	;Reg 0 = DevVenId
 
-		;Rosewill two serial port PCIe adapter
+		;Rosewill RC-301EU two serial port PCIe adapter
 		; C158 = OXPCIe952 
 		; 1415 = Oxford Semiconductor / PLX Technology
 		mov	eax, 0C1581415h
@@ -1046,6 +1044,15 @@ PCI_CFG_DATA	equ	0CFCh
 		call	PrHexDwordEAX
 
 		PR_STR_CRLF " = [BAR0 + 0000h]"
+
+		;UART[0] Registers at 0x1000..0x10FF (use this)
+		;UART[1] Registers at 0x1200..0x12FF
+
+		;[cs:DbgComIoBase] = &UART0_Registers for use by COM routines
+		add	edi, 1000h		;edi = &UART0_Registers
+		mov	ebx, edi		;ebx = &UART0_Registers
+		call	ComInit
+		PR_STR_CRLF "Hello world!"
 
 		jmp	.PciFindDevVenIdDone
 

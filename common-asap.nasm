@@ -513,9 +513,9 @@ PrBufxxdr:	;proc	near
 ;Initialize serial port.
 ;
 ;Input
-;  bx = com I/O base (0 = none, 03F8h = COM1, 02F8h = COM2, ...)
+;  ebx = com I/O base (0 = none, 03F8h = COM1, 02F8h = COM2, ...)
 ;Output
-;  cs:[DbgComIoBase] = bx
+;  cs:[DbgComIoBase] = ebx
 ;Modifies
 ;  flags
 ;References
@@ -526,18 +526,23 @@ PrBufxxdr:	;proc	near
 ;  http://cs.smith.edu/~thiebaut/ArtOfAssembly/CH13/CH13-3.html
 ;-----------------------------------------------------------------------------
 ComInit: 	;proc	near
-		push	ax
-		push	dx
+		push	eax
+		push	edx
 
 
-		or	bx, bx			;bx = 0?
+		or	ebx, ebx		;ebx = 0?
 		jz	.Done			; yes: Done
 
-		mov	word [cs:DbgComIoBase], bx
-		
-		cmp	bx, COM4_INT_14H
+		mov	dword [cs:DbgComIoBase], ebx
+
+		cmp	ebx, COM4_IO_BASE
+		jg	.ComInitPciBase
+
+		cmp	ebx, COM4_INT_14H
 		jg	.ComInitIoBase
-		
+
+
+;.ComInitInt14h:
 		;BIOS INT 14h required for VMware Workstation 9 guest?
 		mov	al, 11100111b		;9600,n,1,8
 		xor	ah, ah			;ah = 0
@@ -546,7 +551,8 @@ ComInit: 	;proc	near
 		int	14h			;Serial Port Initialization
 		;ax = Serial Port Status
 		jmp	.Done
-		
+
+
 .ComInitIoBase:
 		or	bx, bx
 		jz	.Done
@@ -596,13 +602,66 @@ ComInit: 	;proc	near
 		mov	al, 0Bh 		;UART_MCR_OUT2 + UART_MCR_RTS + UART_MCR_DTR
 		out	dx, al
 
-		;mov	word [cs:DbgComIoBase], bx
+		;mov	dword [cs:DbgComIoBase], ebx
+
+
+.ComInitPciBase:
+		or	ebx, ebx
+		jz	.Done
+
+		;Assume DLAB = 0
+		mov	edx, ebx
+		add	edx, UART_IER
+		xor	al, al			;Disable UART interrupts
+		mov	[es:edx], al
+
+		mov	edx, ebx
+		add	edx, UART_LCR
+		mov	al, UART_LCR_DLAB	;DLAB = 1
+		mov	[es:edx], al
+
+		;Set bit rate - divisor latch low byte
+		;/* 0x01 = 115,200 BPS */
+		;/* 0x02 = 57,600 BPS */
+		;/* 0x03 = 38,400 BPS */
+		;/* 0x06 = 19,200 BPS */
+		;/* 0x0C = 9,600 BPS */
+		;/* 0x18 = 4,800 BPS */
+		;/* 0x30 = 2,400 BPS */
+		mov	edx, ebx
+		add	edx, UART_DLL
+		mov	al, 01h			;115200 bps
+		;mov	al, 0Ch			;9600 bps
+		mov	[es:edx], al
+
+		mov	edx, ebx
+		add	edx, UART_DLM
+		mov	al, 0			;115200 bps
+		mov	[es:edx], al
+
+		mov	edx, ebx
+		add	edx, UART_LCR
+		mov	al, UART_LCR_8N1	;8,N,1
+		mov	[es:edx], al
+
+		mov	edx, ebx
+		add	edx, UART_FCR
+		mov	al, 0C7h		;UART_FCR_RCVR_TRIGGER_14 + UART_FCR_XMIT_FIFO_RESET + UART_FCR_RCVR_FIFO_RESET + UART_FCR_FIFO_ENABLE
+		mov	[es:edx], al
+
+		mov	edx, ebx
+		add	edx, UART_MCR
+		mov	al, 0Bh 		;UART_MCR_OUT2 + UART_MCR_RTS + UART_MCR_DTR
+		mov	[es:edx], al
+
+		;mov	dword [cs:DbgComIoBase], ebx
+
 
 .Done:
-		pop	dx
-		pop	ax
+		pop	edx
+		pop	eax
 		ret
-;ComInit 	endp
+;ComInit	endp
 
 
 ;-----------------------------------------------------------------------------
@@ -630,9 +689,14 @@ ComOutAL:	;proc	near
 		or	bx, bx
 		jz	.Done
 
+		cmp	ebx, COM4_IO_BASE
+		jg	.ComOutPciBase
+
 		cmp	bx, COM4_INT_14H
 		jg	.ComOutIoBase
 
+
+;.ComOutInt14h:
 		;BIOS INT 14h required for VMware Workstation 9 guest?
 		push	ax			;Save al = byte to output
 
@@ -706,7 +770,6 @@ ComOutAL:	;proc	near
 
 		pop	ax			;Restore al = byte to output
 
-
 		;Send al
 		pushf
 		cli
@@ -714,7 +777,54 @@ ComOutAL:	;proc	near
 		out	dx, al
 		popf
 
-		
+		jmp	.Done
+
+
+.ComOutPciBase:
+		push	ax			;Save al = byte to output
+
+		;Wait for transmitter hold register to be empty
+		mov	edx, ebx
+		add	edx, UART_LSR
+.ThreNotReadyC:
+		mov	al, [es:edx]
+		test	al, 20h 		;UART_LSR_THRE
+		jz	.ThreNotReadyB
+
+%if USE_CTS_FLOW_CTRL
+		;CTS flow control
+		;Wait for Clear to Send (CTS) before sending
+		mov	edx, ebx
+		add	edx, UART_MSR
+.CtsNotReadyC:
+		mov	al, [es:edx]
+		test	al, UART_MSR_CTS
+		jz	.CtsNotReadyB
+%endif ;if USE_CTS_FLOW_CTRL
+
+%if 0 ;USE_DSR_FLOW_CTRL
+		;DSR flow control (very rare)
+		;Wait for Data Set Ready  (DSR) before sending
+		mov	edx, ebx
+		add	edx, UART_MSR
+.DsrNotReadyC:
+		mov	al, [es:edx]
+		test	al, UART_MSR_DSR
+		jz	.DsrNotReadyB
+%endif ;if USE_DSR_FLOW_CTRL
+
+		pop	ax			;Restore al = byte to output
+
+		;Send al
+		pushf
+		cli
+		mov	edx, ebx
+		mov	[es:edx], al
+		popf
+
+		jmp	.Done
+
+
 .Done:
 		pop	dx
 		pop	bx
