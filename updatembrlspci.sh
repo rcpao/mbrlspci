@@ -1,0 +1,1 @@
+. updatebootloader.sh mbrlspci.img

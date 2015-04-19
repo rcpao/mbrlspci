@@ -1,0 +1,16 @@
+target remote localhost:1234
+set architecture i8086
+display /i ($cs*16)+$pc
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+#stepi
+br *0x7c00
+cont

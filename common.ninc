@@ -1,0 +1,564 @@
+;-----------------------------------------------------------------------------
+;common.ninc -- en_bootier Common Include File (Zaphod)
+;
+;Installs bootier INT 13h Redirector into EBDA and hooks INT 13h vector.
+;
+;WARNING: If EBDA moves, INT 13h vector will be pointing to the wrong place and
+;         the system will crash and burn.
+;
+;References:
+;  http://www.nasm.us/
+;  http://stackoverflow.com/questions/10598802/which-value-should-be-used-for-sp-for-booting-process
+;  http://en.wikipedia.org/wiki/Master_boot_record
+;  http://en.wikipedia.org/wiki/Volume_Boot_Record
+;  http://en.wikipedia.org/wiki/BIOS_parameter_block
+;  http://stackoverflow.com/questions/10598802/which-value-should-be-used-for-sp-for-booting-process
+;  http://www.organicdesign.co.nz/Writing_a_boot_loader_in_assembler
+;-----------------------------------------------------------------------------
+
+;-----------------------------------------------------------------------------
+;Include Files
+;-----------------------------------------------------------------------------
+
+%include "version.ninc"
+
+
+;-----------------------------------------------------------------------------
+;Equates
+;-----------------------------------------------------------------------------
+
+%ifndef __COMMON_INCLUDED
+%define __COMMON_INCLUDED 1
+%endif ;%ifndef __COMMON_INCLUDED
+
+
+BUILD_TYPE_MBR		equ	1	;MBR boot loader
+BUILD_TYPE_COM		equ	2	;DOS .COM file for testing
+BUILD_TYPE_EXEBIN	equ	3	;DOS bin with EXE header file for testing (output is .EXE) (not implemented)
+BUILD_TYPE_EXE		equ	4	;DOS .EXE file for testing (not implemented)
+;BUILD_TYPE_GPT_PROT_MBR equ	5	;GPT / Protective MBR (not implemented)
+%ifndef BUILD_TYPE
+%define BUILD_TYPE BUILD_TYPE_MBR
+%endif ;BUILD_TYPE
+
+
+;DBG_ENABLED is a way to disable all DBG_* macros
+; USE_common_asap_nasm = 0 is another way
+; USE_common_asap_nasm is defined in *.nasm which included us
+DBG_ENABLED		equ	1	;DBG_ macros 0=disabled, 1=enabled
+
+;DbgLevel is 1 byte
+;DL_* are the first argument to DBG_* macros
+DL_00			equ	00h	;0 = always enabled debug (is compiled in)
+DL_01			equ	01h	;1 = debug
+;DL_02			equ	02h	;2 = debug
+DL_05			equ	05h	;5 = init-asap.nasm/KeyPause 0:7C00h & Int18h
+DL_06			equ	06h	;6 = init-asap.nasm/DBG_PERM_VALUES: "DbgLevel=05; DbgComIoBase=03f8; VerboseLevel=07; DL_BOOT=80; DL_TIER=80; AddLbaOfs=00000000:00000000"
+DL_08			equ	08h	;8 = perm-asap.nasm/DL_TLBA_ACCESSED
+DL_09			equ	09h	;9 = init-asap.nasm/DL_Disk_Modify; perm-asap.nasm/DL_INT13H_FN_PR
+DL_0A			equ	0Ah	;10(0Ah) = debug
+;DL_64			equ	64h	;100(64h) = debug
+DL_FE			equ	0FEh	;254(0FEh) = maximum debug level
+DL_FF			equ	0FFh	;always disabled debug (is compiled in)
+DL_MIN			equ	DL_01	;minimum debug level
+DL_MAX			equ	DL_FE	;maximum debug level
+DL_ENABLED		equ	DL_00	;always enabled debug
+DL_DISABLED		equ	DL_FF	;always disabled debug (is compiled in)
+;DBG_LEVEL is the default DbgLevel:
+;DBG_LEVEL		equ	00h	;for Release build
+;DBG_LEVEL		equ	01h	;DBG
+ DBG_LEVEL		equ	DL_05	;Press any key to continue 0:7C00h; ErrVmapPageFault
+;DBG_LEVEL		equ	DL_08	;TlbaMin & TlbaMax
+;DBG_LEVEL		equ	DL_09	;DL_Disk_Modify
+;DBG_LEVEL		equ	DL_MAX	;Maximum debug level
+;DBG_LEVEL_do_not_use	equ	DL_DISABLED ;Never use this debug level!
+
+
+VL_SILENT		equ	00h		;Do not display anything (unless error)
+VL_SIGN_ON		equ	01h		;MsgSignOn1 and MsgCopyright only
+VL_STEPS		equ	02h		;... ##
+VL_TIER			equ	04h		;tdisk info
+;VL_VDISK		equ	08h		;tdisk + vdisk info
+VERBOSE_LEVEL		equ	(VL_SIGN_ON + VL_STEPS + VL_TIER) ;Default VerboseLevel
+
+
+;SAVE_INIT_REGS is only for init-asap.nasm
+%define SAVE_INIT_REGS		1	;Ubuntu 10.04 GRUB 2 requires 1 as DL is never restored by caller?
+USE_KEY_PAUSE_MASK_MBR	equ	00Fh
+USE_KEY_PAUSE_MASK_S1	equ	0F0h
+USE_KEY_PAUSE_DISABLED	equ	000h	;000h disabled
+USE_KEY_PAUSE_MBR	equ	001h	;MBR: none
+USE_KEY_PAUSE_DBG_MBR	equ	002h	;001h + DBG MBR
+USE_KEY_PAUSE_S1	equ	010h	;Stage 1: Press any key to reboot
+USE_KEY_PAUSE_DBG_S1	equ	020h	;010h + DBG Stage 1
+USE_KEY_PAUSE		equ	USE_KEY_PAUSE_S1 ;Default = USE_KEY_PAUSE_S1
+%if (USE_KEY_PAUSE & USE_KEY_PAUSE_MASK_MBR > USE_KEY_PAUSE_DISABLED)
+;%undef SAVE_INIT_REGS
+%define SAVE_INIT_REGS		0	;USE_KEY_PAUSE requires SAVE_INIT_REGS = 0 to fit in MBR at LBA 0
+%endif ;USE_KEY_PAUSE
+
+
+USE_INT_10H		equ	1	;0=silent (for graphic mode debug only), 1=normal
+USE_BIG_REAL_MODE	equ	0	;PCI memory is usually mapped > 1 MB
+;USE_DL_TIER		equ	0	;BIOS drive number of the tdisk DDF to boot (0 = DL_BOOT)
+					; Directly modify init-asap.nasm/DlTier
+
+USE_PERM_MEM_TYPE_EBDA	equ	1	;EBDA
+USE_PERM_MEM_TYPE_CONV	equ	2	;Conventional memory
+USE_PERM_MEM_TYPE_NONE	equ	3	;None.  Use Perm in place immediately after Init.
+;  Warning: Windows 8 boot sector will do what we do and copy itself from 0:7C00h to 0:0600h overwriting
+;           our Init section.
+%if ((BUILD_TYPE == BUILD_TYPE_COM) || (BUILD_TYPE == BUILD_TYPE_EXEBIN) || (BUILD_TYPE == BUILD_TYPE_EXE))
+USE_PERM_MEM_TYPE	equ	USE_PERM_MEM_TYPE_NONE
+%else ;BUILD_TYPE
+;USE_PERM_MEM_TYPE	equ	USE_PERM_MEM_TYPE_EBDA
+USE_PERM_MEM_TYPE	equ	USE_PERM_MEM_TYPE_CONV
+%endif ;BUILD_TYPE
+;USE_PERM_MEM_TYPE:
+
+USE_PERM_7C00H		equ	1	;0 = Init + Perm are read together into 600h to 7C00h - stack.
+					;1 = Init read into 600h to 7C00h - stack + Perm read into 7C00h.
+
+;INT 10h character codes
+CR			equ	13
+LF			equ	10
+BS			equ	8
+
+
+;Device Address Packet (DAP)
+DAP_PACKET_SIZE		equ	0	;0 Packet size in bytes
+DAP_RESERVED_1		equ	1	;1 Reserved
+DAP_NUM_BLKS_XFER_1B	equ	2	;2 Number of blocks to transfer
+DAP_RESERVED_3		equ	3	;3 Reserved
+DAP_HOST_XFER_BUF_4B	equ	4	;4 Address of host transfer buffer Seg:Offs
+ DAP_HOST_XFER_BUF_4B_OFS equ	4 + 0	;4 Address of host transfer buffer Offs
+ DAP_HOST_XFER_BUF_4B_SEG equ	4 + 2	;6 Address of host transfer buffer Seg
+DAP_START_LBA		equ	8	;8 Starting LBA
+DAP_HOST_XFER_BUF_8B	equ	10h	;10h 64-bit unsigned linear address of host transfer buffer
+					; when [DAP_HOST_XFER_BUF_4B] = FFFFh:FFFFh
+					; or [DAP_NUM_BLKS_XFER_1B] = FFh
+DAP_NUM_BLKS_XFER_4B	equ	18h	;18h Number of blocks to transfer when [DAP_NUM_BLKS_XFER_1B] = FFh
+
+
+;INT 13h Functions
+INT_13H_RESET		equ	00h		;INT 13h Reset Fixed Disk/Diskette System
+INT_13H_EXT_PRESENT_AH	equ	41h		;INT 13h Check Extensions Present
+INT_13H_EXT_READ_AH	equ	42h		;INT 13h Extended Read
+INT_13H_EXT_READ	equ	INT_13H_EXT_READ_AH * 100h ;INT 13h Extended Read
+INT_13H_EXT_WRITE_AH	equ	43h		;INT 13h Extended Write
+INT_13H_EXT_WRITE	equ	INT_13H_EXT_WRITE_AH * 100h + 00h ;INT 13h Extended Write without Verify
+;INT_13H_EXT_WRITE	equ	INT_13H_EXT_WRITE_AH * 100h + 01h ;INT 13h Extended Write without Verify
+;INT_13H_EXT_WRITE	equ	INT_13H_EXT_WRITE_AH * 100h + 02h ;INT 13h Extended Write and Verify
+; 4302h Tyan S5512 + Kingston SSDNOW 30GB returns CF/AH=01
+INT_13H_GET_DEV_PARAMS_AH equ	48h		;INT 13h Get Device Parameters
+INT_13H_SEND_PACKET	equ	50D7h		;INT 13h Send Packet Command
+
+INT_13H_CF0_AND_AH0	equ	0		;if INT 13h returns CF = 0, then also require AH = 0 (0 = FALSE, 1 = TRUE)
+INT_13H_INIT_RETRY_LIMIT equ	5		;Init INT 13h retry limit
+INT_13H_INIT_RETRY_DELAY_US equ	0F4240h		;Init INT 13h retry delay in microseconds (minimum is 1000) (000Fh:4240h = 1 second)
+%if ((INT_13H_INIT_RETRY_DELAY_US != 0) && (INT_13H_INIT_RETRY_DELAY_US < 1000))
+%warning Init INT 13h retry delay (microseconds) effective minimum is 1000 (3E8h)!
+%endif
+
+
+INT_15H_WAIT		equ	86h		;INT 53h FN 86h Wait
+
+
+;-----------------------------------------------------------------------------
+;Debug Output to Serial Port
+;-----------------------------------------------------------------------------
+
+COM_IO_DISABLE		equ	0
+COM1_INT_14H		equ	1		;COM[1..3]_INT_14H will be decremented by 1 before int 14h
+COM2_INT_14H		equ	2		; 9600,n,1,8
+COM3_INT_14H		equ	3		;
+COM4_INT_14H		equ	4		;
+COM1_IO_BASE		equ	3F8h
+COM2_IO_BASE		equ	2F8h
+COM3_IO_BASE		equ	3E8h
+COM4_IO_BASE		equ	2E8h
+DBG_COM_IO_BASE 	equ	COM_IO_DISABLE ;COM1_IO_BASE ;COM1_INT_14H
+	;Initial cs:DbgComIoBase value before Log 13 DbgComIoBase is read.
+	;DBG_COM_IO_BASE = COM_IO_DISABLE to disable copying output to serial port.
+	;Otherwise, define a COM#_IO_BASE to output to.
+
+USE_CTS_FLOW_CTRL	equ	1
+;Set USE_CTS_FLOW_CTRL = 0 to disable CTS flow control
+;USE_DSR_FLOW_CTRL	equ	0 ;This is hard coded to 0 in ComOutAL
+
+
+;16550 UART registers and bit masks
+; http://www.national.com/ds/PC/PC16550D.pdf
+;A 16750 UART can directly control the state of the RTS and DTS for hardware character flow control, depending on the current state of the FIFO.
+; http://www.latticesemi.com/documents/doc18683x61.pdf
+UART_RBR		equ	0
+UART_THR		equ	0
+UART_IER		equ	1
+UART_IIR		equ	2
+UART_FCR		equ	2
+UART_LCR		equ	3
+UART_MCR		equ	4
+UART_LSR		equ	5
+UART_MSR		equ	6
+UART_SCR		equ	7
+UART_DLL		equ	0
+UART_DLM		equ	1
+
+UART_LCR_WLS0		equ	01h
+UART_LCR_WLS1		equ	02h
+UART_LCR_8N1		equ	(UART_LCR_WLS1 + UART_LCR_WLS0)
+UART_LCR_DLAB		equ	80h
+
+UART_FCR_FIFO_ENABLE	equ	01h
+UART_FCR_RCVR_FIFO_RESET equ	02h
+UART_FCR_XMIT_FIFO_RESET equ	04h
+UART_FCR_DMA_MODE_SELECT equ	08h
+UART_FCR_RCVR_TRIGGER_LSB equ	40h
+UART_FCR_RCVR_TRIGGER_MSB equ	80h
+UART_FCR_RCVR_TRIGGER_01  equ	0
+UART_FCR_RCVR_TRIGGER_04  equ	(UART_FCR_RCVR_TRIGGER_LSB)
+UART_FCR_RCVR_TRIGGER_08  equ	(UART_FCR_RCVR_TRIGGER_MSB)
+UART_FCR_RCVR_TRIGGER_14  equ	(UART_FCR_RCVR_TRIGGER_MSB + UART_FCR_RCVR_TRIGGER_LSB)
+
+UART_MCR_DTR		equ	01h
+UART_MCR_RTS		equ	02h
+UART_MCR_OUT1		equ	04h
+UART_MCR_OUT2		equ	08h
+UART_MCR_LOOP		equ	10h
+
+UART_LSR_DR		equ	01h
+UART_LSR_OE		equ	02h
+UART_LSR_PE		equ	04h
+UART_LSR_FE		equ	08h
+UART_LSR_BI		equ	10h
+UART_LSR_THRE		equ	20h
+UART_LSR_TEMT		equ	40h
+UART_LSR_RCVR_FIFO_ERROR equ	80h
+
+UART_MSR_DCTS		equ	01h
+UART_MSR_DDSR		equ	02h
+UART_MSR_TERI		equ	04h
+UART_MSR_DDCD		equ	08h
+UART_MSR_CTS		equ	10h
+UART_MSR_DSR		equ	20h
+UART_MSR_RI		equ	40h
+UART_MSR_DCD		equ	80h
+
+
+;-----------------------------------------------------------------------------
+;NORMALIZE_SEGOFS Seg, (e)Ofs
+;  Normalize Seg:eOfs.
+;Input
+;  Seg:(e)Ofs (Seg and (e)Ofs must not be (e)ax or (e)bx)
+;    where (e)Ofs may be cx or ecx, dx or edx, si or esi, di or edi
+;Output
+;  Same as input
+;-----------------------------------------------------------------------------
+%macro NORMALIZE_SEGOFS 2 ;Seg, (e)Ofs
+		pushf
+    		push	eax
+		push	ebx
+
+		xor	eax, eax	;eax = 0
+		mov	ax, %1		;eax = Seg
+		shl	eax, 4		;eax paragraph to byte adjust
+%if 1
+		add	eax, %2		;eax = (Seg << 4) + eOfs
+%else
+		movzx	ebx, %2		;ebx = 0:Ofs
+		add	eax, ebx	;eax = (Seg << 4) + Ofs
+%endif
+		movzx	%2, al		;(e)Ofs = ((Seg << 4) + (e)Ofs) & 0Fh
+		and	%2, 0Fh		;
+
+    		shr	eax, 4		;eax byte to paragraph adjust
+    		mov	%1, ax		;Seg = ((Seg << 4) + Ofs) >> 4
+
+		pop	ebx
+    		pop	eax
+		popf
+%endmacro ;NORMALIZE_SEGOFS
+
+
+;-----------------------------------------------------------------------------
+;EXI_TO_SEGOFS Exi, Seg, Ofs
+;Input
+;  Exi = ebx, ecx, edx, esi, or edi
+;Output
+;  Seg:Ofs = ds:bx, ds:cx, ds:dx, ds:si, ds:di,
+;            es:bx, es:cx, es:dx, es:si, or es:di
+;            where Ofs must be the lower 16-bits of register Exi.
+;Example
+;  Replace AhciBufferESDI with AhciBufferEDI and EXI_TO_SEGOFS edi, es, di
+;-----------------------------------------------------------------------------
+%macro EXI_TO_SEGOFS 3 ;Exi, Seg, Ofs
+		pushf
+    		push	eax
+    		mov	eax, %1	;Exi
+    		shr	eax, 4
+    		mov	%2, ax	;Seg
+    		and	%1, 0Fh	;Ofs must be low word of Exi
+				; Notice that we do not actually write to Ofs.
+				; Exi = Exi & 0Fh;
+    		pop	eax
+		popf
+%endmacro ;EXI_TO_SEGOFS
+
+
+;-----------------------------------------------------------------------------
+;COM_INIT
+;-----------------------------------------------------------------------------
+%macro COM_INIT 0
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		push	bx
+		mov	bx, word [cs:DbgComIoBase]
+		or	bx, bx
+		jz	%%L1
+		call	ComInit
+%%L1:
+		pop	bx
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;COM_INIT
+
+
+;-----------------------------------------------------------------------------
+;PR_STR
+;-----------------------------------------------------------------------------
+%macro PR_STR 1+
+		jmp	%%endstr
+%%str:		db	%1
+		db	0 ;NUL
+%%endstr:
+		push	si
+		mov	si, %%str
+		call	PrStrCS
+		pop	si
+%endmacro ;PR_STR
+
+
+;-----------------------------------------------------------------------------
+;PR_CRLF
+;-----------------------------------------------------------------------------
+%macro PR_CRLF 0
+		call	PrCRLF
+%endmacro ;PR_CRLF
+
+
+;-----------------------------------------------------------------------------
+;PR_STR_CRLF
+;-----------------------------------------------------------------------------
+%macro PR_STR_CRLF 1+
+		PR_STR	%1,CR,LF
+		;PR_CRLF
+%endmacro ;PR_STR_CRLF
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_STR
+;-----------------------------------------------------------------------------
+%macro DBG_PR_STR 2+
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		PR_STR %2
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_STR
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_CRLF
+;-----------------------------------------------------------------------------
+%macro DBG_PR_CRLF 1
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		call	PrCRLF
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_CRLF
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_STR_CRLF
+;-----------------------------------------------------------------------------
+%macro DBG_PR_STR_CRLF 2+
+		DBG_PR_STR %1, %2,CR,LF
+%endmacro ;DBG_PR_STR_CRLF
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_BUF
+;-----------------------------------------------------------------------------
+%macro DBG_PR_BUF 2+
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		PR_STR %2
+		;call	PrBuf
+		call	PrBufxxdr
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_BUF
+
+
+;-----------------------------------------------------------------------------
+;PR_REGS
+;Input
+;  all regs
+;  flags
+;-----------------------------------------------------------------------------
+%macro PR_REGS 0
+		push	cs
+		call	PrRegs
+		;call	far PrRegs
+%endmacro ;PR_REGS
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_REGS
+;-----------------------------------------------------------------------------
+%macro DBG_PR_REGS 2+
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%LNoPrRegs
+		PR_STR %2
+		popf ;WARNING: Flags must be restored for PrRegs to display!
+		PR_REGS
+		jmp	%%Ldone
+%%LNoPrRegs:
+		popf
+%endif ;DBG_ENABLED
+%%Ldone:
+%endmacro ;DBG_PR_REGS
+
+
+;-----------------------------------------------------------------------------
+;PR_ERR_REGS
+;Input
+;  all regs
+;  flags
+;-----------------------------------------------------------------------------
+%macro PR_ERR_REGS 0
+		call	PrErrRegsPrefix
+		PR_REGS
+%endmacro ;PR_ERR_REGS
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_ERR_REGS
+;-----------------------------------------------------------------------------
+%macro DBG_PR_ERR_REGS 2+
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%LNoPrErrRegs
+		PR_STR %2
+		popf ;WARNING: Flags must be restored for PrErrRegs to display!
+		PR_ERR_REGS
+		jmp	%%Ldone
+%%LNoPrErrRegs:
+		popf
+%endif ;DBG_ENABLED
+%%Ldone:
+%endmacro ;DBG_PR_ERR_REGS
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_EBDA
+;-----------------------------------------------------------------------------
+%macro DBG_PR_EBDA 2+
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		PR_STR %2
+		call	PrEbda
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_EBDA
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_EBDA_BUF
+;-----------------------------------------------------------------------------
+%macro DBG_PR_EBDA_BUF 2+
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		PR_STR %2
+		call	PrEbdaBuf
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_EBDA_BUF
+
+
+;-----------------------------------------------------------------------------
+;DBG_PR_HEX_BYTE_AL
+;-----------------------------------------------------------------------------
+%macro DBG_PR_HEX_BYTE_AL 1
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		call	PrHexByteAL
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_HEX_BYTE_AL
+
+;-----------------------------------------------------------------------------
+;DBG_PR_HEX_WORD_AX
+;-----------------------------------------------------------------------------
+%macro DBG_PR_HEX_WORD_AX 1
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		call	PrHexWordAX
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_HEX_WORD_AX
+
+;-----------------------------------------------------------------------------
+;DBG_PR_HEX_DWORD_EAX
+;-----------------------------------------------------------------------------
+%macro DBG_PR_HEX_DWORD_EAX 1
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		call	PrHexDwordEAX
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_HEX_DWORD_EAX
+
+;-----------------------------------------------------------------------------
+;DBG_PR_DEC_DWORD_EAX
+;-----------------------------------------------------------------------------
+%macro DBG_PR_DEC_DWORD_EAX 1
+%if ((DBG_ENABLED) && (USE_common_asap_nasm))
+		pushf
+		cmp	byte [cs:DbgLevel], %1
+		jb	%%Ldone
+		call	PrDecDwordEAX
+%%Ldone:
+		popf
+%endif ;DBG_ENABLED
+%endmacro ;DBG_PR_DEC_DWORD_EAX
+
+
