@@ -1,14 +1,14 @@
-00build.txt -- Build Notes for mbrlspci --------------------------------------
+README for mbrlspci ----------------------------------------------------------
 
-mbrlspci is a Legacy MBR (with no partition table entries) for 
-reading/setting PCI Configuration values for test purposes.
+mbrlspci is a Legacy MBR (with no partition table entries) for reading
+PCI Configuration registers for test purposes.
 
 Copyright (C) 2015 Roger C. Pao <rcpao1+mbrlspci@gmail.com>
 
 Sun Apr 19 01:21:30 PDT 2015
 
 
-Licensing (GPLv3) ------------------------------------------------------------
+License (GPLv3) --------------------------------------------------------------
 
 This program is free software: you can redistribute it and/or modify it
 under the terms of the GNU General Public License version 3 as published
@@ -263,8 +263,8 @@ wont fix
 
 . Windows Setup:
 Windows cannot be installed to this disk.  
-This computer’s hardware may not support booting to this disk.  
-Ensure that the disk’s controller is enabled in the computer’s BIOS menu.
+This computer's hardware may not support booting to this disk.  
+Ensure that the disk's controller is enabled in the computer's BIOS menu.
 
 . MS-DOS 6.22 fails
 FreeDOS 1.1 fails
