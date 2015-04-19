@@ -99,7 +99,7 @@ USE_KEY_PAUSE		equ	USE_KEY_PAUSE_S1 ;Default = USE_KEY_PAUSE_S1
 
 
 USE_INT_10H		equ	1	;0=silent (for graphic mode debug only), 1=normal
-USE_BIG_REAL_MODE	equ	0	;PCI memory is usually mapped > 1 MB
+USE_BIG_REAL_MODE	equ	1	;PCI memory is usually mapped > 1 MB
 ;USE_DL_TIER		equ	0	;BIOS drive number of the tdisk DDF to boot (0 = DL_BOOT)
 					; Directly modify init-asap.nasm/DlTier
 

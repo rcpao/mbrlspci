@@ -979,9 +979,12 @@ PCI_CFG_DATA	equ	0CFCh
 		mov	[cs:PciDevNr], al	;
 		mov	[cs:PciFnNr], al	;
 		mov	[cs:PciRegNr], al	;Reg 0 = DevVenId
+
+		;Rosewill two serial port PCIe adapter
+		; C158 = OXPCIe952 
+		; 1415 = Oxford Semiconductor / PLX Technology
 		mov	eax, 0C1581415h
-			;C158 = OXPCIe952 two serial port PCIe adapter
-			;1415 = Oxford Semiconductor / PLX Technology
+
 		call	PciFindDevVenId
 		jc	.PciFindDevVenIdFail
 
@@ -995,7 +998,6 @@ PCI_CFG_DATA	equ	0CFCh
 		mov	byte [cs:PciRegNr], 02h	;Class
 		;mov	byte [cs:DbgPciScanShift], 1
 		call	PciCfgRead32
-		;call	PciCfgRead16
 		mov	byte [cs:PciRegNr], 00h ;DevVenId
 		;mov	byte [cs:DbgPciScanShift], 0
 
@@ -1009,10 +1011,51 @@ PCI_CFG_DATA	equ	0CFCh
 		mov	cl, 7
 		call	PrPciCfgRegs
 
+;03 00 00 00 80030000 c1581415 DeviceId:VendorId
+;03 00 00 01 80030004 00100006
+;03 00 00 02 80030008 07000200 Class:Subclass:...
+;03 00 00 03 8003000c 00000010
+;03 00 00 04 80030010 cfdfc000 BAR0, MEM, 16K
+;03 00 00 05 80030014 cfa00000 BAR1, MEM, 2M
+;03 00 00 06 80030018 cf800000 BAR2, MEM, 2M
+
+		;BAR0
+		mov	byte [cs:PciRegNr], 04h	;BAR0
+		;mov	byte [cs:DbgPciScanShift], 1
+		call	PciCfgRead32
+		mov	byte [cs:PciRegNr], 00h ;DevVenId
+		;mov	byte [cs:DbgPciScanShift], 0
+
+		;Print BAR0 (eax)
+    		call	PrSpace1
+		call	PrHexDwordEAX
+
+		;"Figure 2 shows the OXPCIe952 configuration space,
+		; which is allocated for each function and is always 32
+		; bits wide."
+		; OXPCIe952 Data Sheet, printed page 9, pdf page 15 of 92.
+		mov	edi, eax		;edi = BAR0
+		test	al, 07h			;0 = 32-bits wide
+		jnz	.PciBar0Fail
+
+		and	edi, 0FFFFFFF0h		;Clear Prefetchable, Type, 0
+
+		;Print [BAR0 + 0000h] = Class code and Rev-ID
+		mov	eax, [es:edi + 0000h]	;Class code and Rev-ID
+    		call	PrSpace1
+		call	PrHexDwordEAX
+
+		PR_STR_CRLF " = [BAR0 + 0000h]"
+
 		jmp	.PciFindDevVenIdDone
 
 .PciFindDevVenIdFail:
 		PR_STR_CRLF "PciFindDevVenIdFail"
+		jmp	.PciFindDevVenIdDone
+
+.PciBar0Fail:
+		PR_STR_CRLF "PciBar0Fail"
+		jmp	.PciFindDevVenIdDone
 
 .PciFindDevVenIdDone:
 
@@ -1603,114 +1646,6 @@ PciCfgRead32:	;proc	near
 		pop	dx
 		ret
 ;PciCfgRead32	endp
-
-
-;-----------------------------------------------------------------------------
-;PciCfgRead16
-;Input
-;  byte [cs:DbgPciScanShift]
-;  byte [cs:PciBusNr]
-;  byte [cs:PciDevNr]
-;  byte [cs:PciFnNr]
-;  byte [cs:PciRegNr]
-;Output
-;  ebx = Addr writen to PCI_CFG_ADDR
-;  ax = Data from PCI_CFG_DATA
-;Modifies
-;  none
-;Reference
-;  http://wiki.osdev.org/PCI
-;-----------------------------------------------------------------------------
-PciCfgRead16:	;proc	near
-		push	dx
-
-%define DBG_PciScanShift 1 ;0 or 1 (see cs:DbgPciScanShift)
-
-%if DBG_PciScanShift
-%macro DBG_PCI_CFG_READ32_SHIFT 1+
-	test	byte [cs:DbgPciScanShift], 1
-	jz	%%Done
-	PR_CRLF
-	PR_STR_CRLF %1
-	PR_REGS
-	call	KeyPauseVoid
-%%Done:
-%endmacro ;DBG_PCI_CFG_READ32_SHIFT
-%endif ;DBG_PciScanShift
-
-		xor	eax, eax
-		xor	ebx, ebx
-
-		;Addr
-
-		mov	al, 1			;Enable
-		;and	al, 01h			;1 bit
-		;shl	ebx, 1			;
-		or	bl, al			;
-
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "En"
-%endif ;DBG_PciScanShift
-
-		mov	al, 0			;Reserved
-		;and	al, 7Fh			;7 bits
-		shl	ebx, 7			;
-		or	bl, al			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Rs"
-%endif ;DBG_PciScanShift
-
-		mov	al, [cs:PciBusNr]	;Bus Number
-		;and	al, 0FFh		;8 bits
-		shl	ebx, 8			;
-		or	bl, al			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Bs"
-%endif ;DBG_PciScanShift
-
-		mov	al, [cs:PciDevNr]	;Device Number
-		;and	al, 1Fh			;5 bits
-		shl	ebx, 5			;
-		or	bl, al			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Dv"
-%endif ;DBG_PciScanShift
-
-		mov	al, [cs:PciFnNr]	;Function Number
-		;and	al, 07h			;3 bits
-		shl	ebx, 3			;
-		or	bl, al			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Fn"
-%endif ;DBG_PciScanShift
-
-		mov	al, [cs:PciRegNr]	;Register Number
-		;and	al, 0Fh			;6 bits
-		shl	ebx, 6			;
-		or	bl, al			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Rg"
-%endif ;DBG_PciScanShift
-
-		shl	ebx, 2			;Zeros
-
-		;ebx = Addr
-		mov	dx, PCI_CFG_ADDR	;
-		mov	eax, ebx		;
-		out	dx, eax			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Addr"
-%endif ;DBG_PciScanShift
-
-		mov	dx, PCI_CFG_DATA	;ax = Data
-		in	ax, dx			;
-%if DBG_PciScanShift
-		DBG_PCI_CFG_READ32_SHIFT "Data"
-%endif ;DBG_PciScanShift
-
-		pop	dx
-		ret
-;PciCfgRead16	endp
 
 
 ;-----------------------------------------------------------------------------
