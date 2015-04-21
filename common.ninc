@@ -177,7 +177,7 @@ COM1_IO_BASE		equ	3F8h
 COM2_IO_BASE		equ	2F8h
 COM3_IO_BASE		equ	3E8h
 COM4_IO_BASE		equ	2E8h
-DBG_COM_IO_BASE 	equ	COM_IO_DISABLE ;COM1_IO_BASE ;COM1_INT_14H
+DBG_COM_IO_BASE 	equ	COM1_IO_BASE ;COM_IO_DISABLE ;COM1_IO_BASE ;COM1_INT_14H
 	;Initial cs:DbgComIoBase value before Log 13 DbgComIoBase is read.
 	;DBG_COM_IO_BASE = COM_IO_DISABLE to disable copying output to serial port.
 	;Otherwise, define a COM#_IO_BASE to output to.
@@ -189,6 +189,7 @@ USE_CTS_FLOW_CTRL	equ	1
 
 ;16550 UART registers and bit masks
 ; http://www.national.com/ds/PC/PC16550D.pdf
+; http://www.ti.com/lit/ds/symlink/pc16550d.pdf
 ;A 16750 UART can directly control the state of the RTS and DTS for hardware character flow control, depending on the current state of the FIFO.
 ; http://www.latticesemi.com/documents/doc18683x61.pdf
 UART_RBR		equ	0

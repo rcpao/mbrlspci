@@ -13,6 +13,8 @@
 ;  http://stackoverflow.com/questions/10598802/which-value-should-be-used-for-sp-for-booting-process
 ;  http://www.organicdesign.co.nz/Writing_a_boot_loader_in_assembler
 ;  BIOS Boot Specification Version 1.01
+;  oxpcie952_ds.pdf, OXPCIe952 PCI Express Bridge to Dual Serial & Parallel Port
+;  OXPCIe952.pdf, OXPCIe952 Data Sheet, April 15 2009
 ;  Roger C. Pao <rcpao1+mbrlspci@gmail.com>
 ;-----------------------------------------------------------------------------
 
@@ -1044,14 +1046,17 @@ PCI_CFG_DATA	equ	0CFCh
 		call	PrHexDwordEAX
 
 		PR_STR_CRLF " = [BAR0 + 0000h]"
+	PR_REGS
 
 		;UART[0] Registers at 0x1000..0x10FF (use this)
 		;UART[1] Registers at 0x1200..0x12FF
+	;ttyS4 at MMIO 0xcfbfd000 (irq = 15, base_baud = 4000000) is a 16C950/954
+	;ttyS5 at MMIO 0xcfbfd200 (irq = 16, base_baud = 4000000) is a 16C950/954
 
-		;[cs:DbgComIoBase] = &UART0_Registers for use by COM routines
 		add	edi, 1000h		;edi = &UART0_Registers
 		mov	ebx, edi		;ebx = &UART0_Registers
 		call	ComInit
+		  ;[cs:DbgComIoBase] = &UART0_Registers for use by COM routines
 		PR_STR_CRLF "Hello world!"
 
 		jmp	.PciFindDevVenIdDone

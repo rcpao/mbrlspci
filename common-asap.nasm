@@ -535,14 +535,16 @@ ComInit: 	;proc	near
 
 		mov	dword [cs:DbgComIoBase], ebx
 
-		cmp	ebx, COM4_IO_BASE
-		jg	.ComInitPciBase
-
 		cmp	ebx, COM4_INT_14H
-		jg	.ComInitIoBase
+		jbe	.ComInitInt14h
+
+		cmp	ebx, 0FFFh		;COM*_IO_BASE
+		jbe	.ComInitIoBase
+
+		jmp	.ComInitPciBase
 
 
-;.ComInitInt14h:
+.ComInitInt14h:
 		;BIOS INT 14h required for VMware Workstation 9 guest?
 		mov	al, 11100111b		;9600,n,1,8
 		xor	ah, ah			;ah = 0
@@ -584,7 +586,7 @@ ComInit: 	;proc	near
 
 		mov	dx, bx
 		add	dx, UART_DLM
-		mov	al, 0			;115200 bps
+		mov	al, 0			;* bps
 		out	dx, al
 
 		mov	dx, bx
@@ -603,6 +605,8 @@ ComInit: 	;proc	near
 		out	dx, al
 
 		;mov	dword [cs:DbgComIoBase], ebx
+
+		jmp	.Done
 
 
 .ComInitPciBase:
@@ -636,7 +640,7 @@ ComInit: 	;proc	near
 
 		mov	edx, ebx
 		add	edx, UART_DLM
-		mov	al, 0			;115200 bps
+		mov	al, 0			;* bps
 		mov	[es:edx], al
 
 		mov	edx, ebx
@@ -655,6 +659,8 @@ ComInit: 	;proc	near
 		mov	[es:edx], al
 
 		;mov	dword [cs:DbgComIoBase], ebx
+
+		jmp	.Done
 
 
 .Done:
@@ -685,18 +691,20 @@ ComOutAL:	;proc	near
 		push	bx
 		push	dx
 
-		mov	bx, word [cs:DbgComIoBase]
-		or	bx, bx
+		mov	ebx, dword [cs:DbgComIoBase]
+		or	ebx, ebx
 		jz	.Done
 
-		cmp	ebx, COM4_IO_BASE
-		jg	.ComOutPciBase
+		cmp	ebx, COM4_INT_14H
+		jbe	.ComOutInt14h
 
-		cmp	bx, COM4_INT_14H
-		jg	.ComOutIoBase
+		cmp	ebx, 0FFFh		;COM*_IO_BASE
+		jbe	.ComOutIoBase
+
+		jmp	.ComOutPciBase
 
 
-;.ComOutInt14h:
+.ComOutInt14h:
 		;BIOS INT 14h required for VMware Workstation 9 guest?
 		push	ax			;Save al = byte to output
 
