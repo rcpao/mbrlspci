@@ -1059,6 +1059,10 @@ PCI_CFG_DATA	equ	0CFCh
 		  ;[cs:DbgComIoBase] = &UART0_Registers for use by COM routines
 		PR_STR_CRLF "Hello world!"
 
+		mov	ebx, DBG_COM_IO_BASE	;ebx = back to default
+		call	ComInit			;
+		PR_STR_CRLF "Bye world! o/"
+
 		jmp	.PciFindDevVenIdDone
 
 .PciFindDevVenIdFail:
